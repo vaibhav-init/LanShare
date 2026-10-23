@@ -70,6 +70,24 @@ temporary — acceptable for "send a file now", not for "always available".
 | fork() per connection | first version, replaced by threads so the PIN throttle could be shared and locked in-process |
 | Thread pool | extra queue/condvar machinery nobody needed; thread-per-connection kept |
 
+## Threading model (revisited — was fork)
+
+- Original build: `fork()` per connection + `PinState` in `MAP_SHARED|MAP_ANONYMOUS`
+  memory (children are separate address spaces, so the mmap was the only way to
+  share the throttle).
+- Now: **detached pthread per connection**. Threads share memory, so the mmap
+  trick was deleted (plain static struct) — and the latent race it never solved
+  got fixed properly: all PIN/throttle mutations happen under one mutex in fs.c.
+- Verified: 4 simultaneous uploads saved byte-identical; parallel wrong-PIN
+  requests stay race-free and lockout still fires after exactly 5.
+
+Known limits (accepted):
+- No cap on connection threads — N clients = N threads; a semaphore cap or a
+  small pool is the upgrade if this ever runs on a hostile network.
+- A slow client holds a thread up to 30 s (idle-read timeout) — cheap way to
+  occupy threads; same fix as above.
+- Log lines from threads can interleave mid-line (cosmetic).
+
 ## Never cut (hard requirements)
 
 - Path sanitization at the trust boundary (reject `..`, decode `%XX`, no escapes from the shared root)
