@@ -10,6 +10,7 @@
 #define _GNU_SOURCE  /* memmem */
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,8 @@
 
 #define SCAN_BUF  65536
 #define HDRS_MAX  4096
+
+static pthread_mutex_t pin_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* ---- tiny io helpers ------------------------------------------------ */
 
@@ -122,17 +125,22 @@ static void scan_consume(Scan *s, size_t n)
 
 int fs_pin_ok(const Config *cfg, const char *pin)
 {
+    int ok;
+    pthread_mutex_lock(&pin_lock);
     if (!pin || strlen(pin) != 4) {
         if (++cfg->pin->fails >= 5) cfg->pin->lock_until = time(NULL) + 30;
-        return 0;
-    }
-    if (time(NULL) < cfg->pin->lock_until) return 0;      /* locked out */
-    if (strcmp(pin, cfg->pin_str) != 0) {
+        ok = 0;
+    } else if (time(NULL) < cfg->pin->lock_until) {
+        ok = 0;                                        /* locked out */
+    } else if (strcmp(pin, cfg->pin_str) != 0) {
         if (++cfg->pin->fails >= 5) cfg->pin->lock_until = time(NULL) + 30;
-        return 0;
+        ok = 0;
+    } else {
+        cfg->pin->fails = 0;
+        ok = 1;
     }
-    cfg->pin->fails = 0;
-    return 1;
+    pthread_mutex_unlock(&pin_lock);
+    return ok;
 }
 
 /* ---- filename sanitizing + unique save -------------------------------

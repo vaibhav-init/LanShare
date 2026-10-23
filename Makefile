@@ -1,5 +1,5 @@
 CC     ?= cc
-CFLAGS ?= -O2 -Wall -Wextra -std=c11
+CFLAGS ?= -O2 -Wall -Wextra -std=c11 -pthread
 SRC    = src/main.c src/net.c src/http.c src/fs.c
 HDR    = src/share.h src/page.h
 

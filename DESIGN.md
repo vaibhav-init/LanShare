@@ -11,7 +11,7 @@ code to unlock uploads, animated progress. No apps to install on the phone.
 | Scope of transfer | **Upload only (phone → laptop)** | Downloads/listing dropped for simplicity — user explicitly cut it |
 | Phone side | Browser only, zero installs | The whole point of the tool |
 | Server footprint | ~5 C files + Makefile + 1 inline HTML page | Smallest complete thing |
-| Connection model | fork() per connection | Simplest correct server loop; threads not needed at this scale |
+| Connection model | detached pthread per connection | PIN state shared in-process behind a mutex; no zombie reaping, no fd juggling |
 
 ## File layout (planned)
 
@@ -67,7 +67,8 @@ temporary — acceptable for "send a file now", not for "always available".
 | LocalSend / Tailscale | Great daily tools, but the point here is building it in C; no-install constraint |
 | `python -m http.server` | No upload page, not C, nothing learned |
 | Whole-file-in-RAM upload parsing | 2 GB phone videos kill it → streaming parser required |
-| Threads per connection | fork is simpler at this scale; revisit only under real load |
+| fork() per connection | first version, replaced by threads so the PIN throttle could be shared and locked in-process |
+| Thread pool | extra queue/condvar machinery nobody needed; thread-per-connection kept |
 
 ## Never cut (hard requirements)
 

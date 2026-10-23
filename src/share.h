@@ -20,7 +20,7 @@ typedef struct { int fails; long lock_until; } PinState;
 typedef struct {
     const char *root;             /* resolved shared dir                */
     int         port;             /* actual bound port                  */
-    PinState   *pin;              /* shared (MAP_ANONYMOUS) state       */
+    PinState   *pin;              /* process-wide, mutex-guarded in fs.c */
     char        pin_str[5];       /* "4271" style                       */
     char        public_url[256];  /* tunnel URL, "" = LAN mode          */
 } Config;

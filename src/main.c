@@ -3,18 +3,18 @@
  *   lanshare [dir]          share dir (default ~/Downloads) on the LAN
  *   lanshare [dir] --tunnel also open a public URL via SSH reverse tunnel
  *
- * Per connection: fork(). PIN + throttle state are shared via a tiny
- * MAP_ANONYMOUS mapping so the forked children agree on lockout.
+ * Per connection: a detached pthread. PIN + throttle state is process-wide
+ * memory guarded by a mutex in fs.c.
  */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -25,6 +25,19 @@
 
 static Config cfg;
 static pid_t  ssh_pid = 0;
+
+/* ---- connection handling ----------------------------------------------
+ * thread-per-connection: shares the pin state in-process (mutex-guarded
+ * in fs.c), no zombie reaping, no fd juggling across processes.
+ */
+static void *conn_thread(void *p)
+{
+    int conn = *(int *)p;
+    free(p);
+    http_serve(conn, &cfg);
+    close(conn);
+    return NULL;
+}
 
 /* ---- cleanup ---------------------------------------------------------- */
 static void cleanup(void)
@@ -143,9 +156,8 @@ int main(int argc, char **argv)
     if (!realpath(dir, resolved)) { perror("realpath"); return 1; }
 
     cfg.root = resolved;
-    cfg.pin  = mmap(NULL, sizeof(PinState), PROT_READ | PROT_WRITE,
-                    MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (!cfg.pin) { perror("mmap"); return 1; }
+    static PinState pin_state;         /* threads share memory; fs.c locks it */
+    cfg.pin = &pin_state;
     memset(cfg.pin, 0, sizeof(PinState));
     gen_pin(cfg.pin_str);
     cfg.public_url[0] = 0;
@@ -191,14 +203,18 @@ int main(int argc, char **argv)
     for (;;) {
         int conn = accept(lfd, NULL, NULL);
         if (conn < 0) { if (errno == EINTR) continue; perror("accept"); continue; }
-        pid_t pid = fork();
-        if (pid == 0) {
-            close(lfd);
-            struct timeval tv = {30, 0};   /* 30 s idle reads, not whole-transfer */
-            setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-            http_serve(conn, &cfg);
-            _exit(0);
+        struct timeval tv = {30, 0};   /* 30 s idle reads, not whole-transfer */
+        setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+
+        int *arg = malloc(sizeof *arg);
+        if (!arg) { close(conn); continue; }
+        *arg = conn;
+        pthread_t t;
+        if (pthread_create(&t, NULL, conn_thread, arg) != 0) {
+            close(conn);               /* out of threads: drop, keep serving */
+            free(arg);
+            continue;
         }
-        close(conn);
+        pthread_detach(t);
     }
 }
